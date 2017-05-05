@@ -31,7 +31,6 @@ import java.util.concurrent.ConcurrentMap;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
-import org.apache.logging.log4j.core.async.AsyncLoggerConfig;
 import org.apache.logging.log4j.core.async.AsyncLoggerContext;
 import org.apache.logging.log4j.core.config.Configuration;
 import org.apache.logging.log4j.core.config.ConfigurationFactory;
@@ -183,28 +182,8 @@ public class PaxLoggingServiceImpl
             }
         }
 
-        Configuration config;
         Object configfile = configuration.get(LOG4J2_CONFIG_FILE_KEY);
-		if (configfile != null) {
-			config = ConfigurationFactory.getInstance().getConfiguration(m_log4jContext,
-                      LOGGER_CONTEXT_NAME, new File(configfile.toString()).toURI());
-        } else {
-            try {
-                Properties props = new Properties();
-                for (Enumeration<String> keys = configuration.keys(); keys.hasMoreElements();) {
-                    String key = keys.nextElement();
-                    props.setProperty(key, configuration.get(key).toString());
-                }
-                props = PropertiesUtil.extractSubset(props, "log4j2");
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                props.store(baos, null);
-                ConfigurationSource src = new ConfigurationSource(new ByteArrayInputStream(baos.toByteArray()));
-                config = new PropertiesConfigurationFactory().getConfiguration(m_log4jContext, src);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        }
-
+        Configuration config = getConfiguration(configuration, configfile);
 
         m_log4jContext.start(config);
 
@@ -222,6 +201,31 @@ public class PaxLoggingServiceImpl
             updateLevels(configuration);
         }
         setLevelToJavaLogging( configuration );
+    }
+
+    private Configuration getConfiguration(Dictionary<String, ?> configuration, Object configFile) {
+        Configuration config;
+
+        if (configFile != null) {
+            config = ConfigurationFactory.getInstance().getConfiguration(m_log4jContext,
+                                                                         LOGGER_CONTEXT_NAME, new File(configFile.toString()).toURI());
+        } else {
+            try {
+                Properties props = new Properties();
+                for (Enumeration<String> keys = configuration.keys(); keys.hasMoreElements();) {
+                    String key = keys.nextElement();
+                    props.setProperty(key, configuration.get(key).toString());
+                }
+                props = PropertiesUtil.extractSubset(props, "log4j2");
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                props.store(baos, null);
+                ConfigurationSource src = new ConfigurationSource(new ByteArrayInputStream(baos.toByteArray()));
+                config = new PropertiesConfigurationFactory().getConfiguration(m_log4jContext, src);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return config;
     }
 
     private void updateLevels(Dictionary<String, ?> config) {
