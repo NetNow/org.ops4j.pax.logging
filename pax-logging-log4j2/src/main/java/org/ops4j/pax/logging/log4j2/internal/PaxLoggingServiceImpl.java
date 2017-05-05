@@ -224,18 +224,28 @@ public class PaxLoggingServiceImpl
                 props.setProperty(key, configuration.get(key).toString());
             }
             props = PropertiesUtil.extractSubset(props, "log4j2");
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            props.store(baos, null);
-            ConfigurationSource src = new ConfigurationSource(new ByteArrayInputStream(baos.toByteArray()));
-            PropertiesConfiguration directConfiguration = new PropertiesConfigurationFactory().getConfiguration(m_log4jContext, src);
-            allConfigurations.add(directConfiguration);
+            if (!props.isEmpty()) {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                props.store(baos, null);
+                ConfigurationSource src = new ConfigurationSource(new ByteArrayInputStream(baos.toByteArray()));
+                PropertiesConfiguration directConfiguration = new PropertiesConfigurationFactory().getConfiguration(m_log4jContext, src);
+                allConfigurations.add(directConfiguration);
+            }
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
 
-        // There should be at least an empty PropertiesConfiguration in the List at this point
-        CompositeConfiguration compositeConfiguration = new CompositeConfiguration(allConfigurations);
-        return compositeConfiguration;
+        switch (allConfigurations.size()) {
+            case 0:
+                return new DefaultConfiguration();
+
+            case 1:
+                return allConfigurations.get(0);
+
+            default:
+                CompositeConfiguration compositeConfiguration = new CompositeConfiguration(allConfigurations);
+                return compositeConfiguration;
+        }
     }
 
     private void updateLevels(Dictionary<String, ?> config) {
