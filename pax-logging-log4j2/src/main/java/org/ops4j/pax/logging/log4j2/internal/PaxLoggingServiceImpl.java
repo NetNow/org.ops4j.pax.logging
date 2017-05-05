@@ -21,8 +21,10 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Dictionary;
 import java.util.Enumeration;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,12 +34,15 @@ import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LoggerContext;
 import org.apache.logging.log4j.core.async.AsyncLoggerContext;
+import org.apache.logging.log4j.core.config.AbstractConfiguration;
 import org.apache.logging.log4j.core.config.Configuration;
 import org.apache.logging.log4j.core.config.ConfigurationFactory;
 import org.apache.logging.log4j.core.config.ConfigurationSource;
 import org.apache.logging.log4j.core.config.DefaultConfiguration;
 import org.apache.logging.log4j.core.config.LoggerConfig;
+import org.apache.logging.log4j.core.config.composite.CompositeConfiguration;
 import org.apache.logging.log4j.core.config.plugins.util.PluginManager;
+import org.apache.logging.log4j.core.config.properties.PropertiesConfiguration;
 import org.apache.logging.log4j.core.config.properties.PropertiesConfigurationFactory;
 import org.apache.logging.log4j.status.StatusLogger;
 import org.apache.logging.log4j.util.PropertiesUtil;
@@ -204,28 +209,33 @@ public class PaxLoggingServiceImpl
     }
 
     private Configuration getConfiguration(Dictionary<String, ?> configuration, Object configFile) {
-        Configuration config;
+        List<AbstractConfiguration> allConfigurations = new ArrayList<>();
 
         if (configFile != null) {
-            config = ConfigurationFactory.getInstance().getConfiguration(m_log4jContext,
+            AbstractConfiguration fileConfiguration = (AbstractConfiguration) ConfigurationFactory.getInstance().getConfiguration(m_log4jContext,
                                                                          LOGGER_CONTEXT_NAME, new File(configFile.toString()).toURI());
-        } else {
-            try {
-                Properties props = new Properties();
-                for (Enumeration<String> keys = configuration.keys(); keys.hasMoreElements();) {
-                    String key = keys.nextElement();
-                    props.setProperty(key, configuration.get(key).toString());
-                }
-                props = PropertiesUtil.extractSubset(props, "log4j2");
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                props.store(baos, null);
-                ConfigurationSource src = new ConfigurationSource(new ByteArrayInputStream(baos.toByteArray()));
-                config = new PropertiesConfigurationFactory().getConfiguration(m_log4jContext, src);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+            allConfigurations.add(fileConfiguration);
         }
-        return config;
+
+        try {
+            Properties props = new Properties();
+            for (Enumeration<String> keys = configuration.keys(); keys.hasMoreElements();) {
+                String key = keys.nextElement();
+                props.setProperty(key, configuration.get(key).toString());
+            }
+            props = PropertiesUtil.extractSubset(props, "log4j2");
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            props.store(baos, null);
+            ConfigurationSource src = new ConfigurationSource(new ByteArrayInputStream(baos.toByteArray()));
+            PropertiesConfiguration directConfiguration = new PropertiesConfigurationFactory().getConfiguration(m_log4jContext, src);
+            allConfigurations.add(directConfiguration);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        // There should be at least an empty PropertiesConfiguration in the List at this point
+        CompositeConfiguration compositeConfiguration = new CompositeConfiguration(allConfigurations);
+        return compositeConfiguration;
     }
 
     private void updateLevels(Dictionary<String, ?> config) {
