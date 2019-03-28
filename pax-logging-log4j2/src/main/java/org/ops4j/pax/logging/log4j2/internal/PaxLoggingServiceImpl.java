@@ -57,6 +57,18 @@ import org.osgi.service.cm.ConfigurationException;
 import org.osgi.service.cm.ManagedService;
 import org.osgi.service.log.LogEntry;
 
+
+import java.nio.file.WatchService;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchEvent;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.ClosedWatchServiceException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.Files;
+import java.nio.file.FileSystems;
+import java.nio.file.DirectoryStream;
+import java.util.HashMap;
 public class PaxLoggingServiceImpl
     implements PaxLoggingService, LogService, ManagedService, ServiceFactory
 {
@@ -84,6 +96,9 @@ public class PaxLoggingServiceImpl
     private LoggerContext m_log4jContext;
     private int m_logLevel = LOG_DEBUG;
     private boolean closed;
+    
+    DirectoryWatcher configFileWatcher;
+    Thread configFileWatcherThread;
 
     static {
         PluginManager.addPackage("org.apache.logging.log4j.core");
@@ -117,6 +132,16 @@ public class PaxLoggingServiceImpl
         {
             Thread.currentThread().setContextClassLoader( old );
         }
+        
+        try {
+            configFileWatcher = new DirectoryWatcher();
+            configFileWatcherThread = new Thread(configFileWatcher);
+            configFileWatcherThread.setDaemon(true);
+            configFileWatcherThread.setName("Log4j2 Glob Watcher");
+            configFileWatcherThread.start();
+        } catch (IOException ex) {
+            StatusLogger.getLogger().error("Failed to construct DirectoryWatcher", ex);
+        }
     }
 
     /**
@@ -124,6 +149,7 @@ public class PaxLoggingServiceImpl
      * used just before disposing of the service instance.
      */
     protected synchronized void shutdown() {
+        configFileWatcher.stop();
         m_log4jContext.stop();
         closed = true;
     }
@@ -162,9 +188,143 @@ public class PaxLoggingServiceImpl
             Thread.currentThread().setContextClassLoader( old );
         }
     }
+    
+    class DirectoryWatcher implements Runnable {
+        Dictionary<String,?> storedConfiguration = null;
+        private final WatchService watchService = FileSystems.getDefault().newWatchService();
+        private final Map<WatchKey,Path> keys = new HashMap<WatchKey,Path>();        
+        
+        public DirectoryWatcher() throws IOException {
+            
+        }
+        //@SuppressWarnings("unchecked")
+        //static <T> WatchEvent<T> cast(WatchEvent<?> event) {
+        //    return (WatchEvent<T>)event;
+        //}
+    
+        @Override
+        public void run() {
+            for (;;) {
+                WatchKey key;
+                try {
+                    key = watchService.take();
+                } catch (InterruptedException | ClosedWatchServiceException ex) {
+                    return;
+                }
+
+                Path dir;
+                synchronized(keys) {
+                    dir = keys.get(key);
+                }
+                if (dir == null) {
+                    System.err.println("WatchKey not recognized!!");
+                    continue;
+                }
+
+                for (WatchEvent<?> event: key.pollEvents()) {
+                    WatchEvent.Kind kind = event.kind();
+
+                    if (kind == StandardWatchEventKinds.OVERFLOW) {
+                        continue;
+                    }
+                    try {
+                        doUpdate(storedConfiguration);
+                    } catch (ConfigurationException ex) {
+                        StatusLogger.getLogger().error("Failed to execute doUpdate", ex);
+                    }
+                }
+
+                // reset key and remove from set if directory no longer accessible
+                boolean valid = key.reset();
+                if (!valid) {
+                    keys.remove(key);
+
+                    // all directories are inaccessible
+                    if (keys.isEmpty()) {
+                        break;
+                    }
+                }
+            }           
+        }
+        
+        void register(Path dir) throws IOException {
+            synchronized(keys) {
+                System.out.println("Registering to watch: " + dir);
+                WatchKey key = dir.register(watchService, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_DELETE);
+                keys.put(key, dir);
+            }
+        }
+        
+        void clear() {
+            synchronized(keys) {
+                for(WatchKey key : keys.keySet()) {
+                    key.cancel();
+                }
+            }
+        }
+        
+        void setConfiguration(Dictionary<String, ?> configuration) {
+            this.storedConfiguration = configuration;
+        }
+        
+        void stop() {
+            try {
+                watchService.close();
+            } catch (IOException ex) {
+                StatusLogger.getLogger().error("Failed to stop WatchService", ex);
+            }
+        }
+    };    
+    
+    private boolean hasGlob(final String expression) {
+        return expression.contains("*");
+        
+    }
+    
+    private String handleGlob(final String expression) {
+        StatusLogger.getLogger().debug("Raw glob configuration string: {}", expression);
+        StringBuilder sb = new StringBuilder();
+        String[] paths = expression.split(",");
+        for(String pathStr : paths) {
+            StatusLogger.getLogger().debug("Working with string: {}", pathStr);
+            final int regexIndex = pathStr.indexOf("*");
+            if(regexIndex > -1) {
+                String glob = pathStr.substring(regexIndex);
+                pathStr = pathStr.substring(0, regexIndex);
+                final Path path = Paths.get(pathStr);
+                
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(path, glob)) {
+                    configFileWatcher.register(path);
+                    for (Path entry: stream) {
+                        sb.append(entry);
+                        sb.append(",");
+                    }
+                } catch (IOException ex) {
+                    StatusLogger.getLogger().error("Error handling glob", ex);
+                }
+                
+            } else {
+                sb.append(pathStr);
+                sb.append(",");
+            }
+        }
+        
+        final int length = sb.length();
+        if(length > 0) {
+            sb.deleteCharAt(length - 1);
+        }
+        
+        String result = sb.toString();
+        StatusLogger.getLogger().debug("Resolved configuration string: {}", result);
+        return result;
+    }
+       
+    
 
     protected void doUpdate( Dictionary<String,?> configuration ) throws ConfigurationException
     {
+        configFileWatcher.setConfiguration(configuration);
+        
         boolean async = false;
         Object asyncObj = configuration.get(LOG4J2_ASYNC_KEY);
         if (asyncObj != null) {
@@ -189,8 +349,13 @@ public class PaxLoggingServiceImpl
 
         Configuration config;
         Object configfile = configuration.get(LOG4J2_CONFIG_FILE_KEY);
-     if (configfile != null) {
-
+        if (configfile != null) {
+            String configFileStr = configfile.toString();
+            configFileWatcher.clear();
+            if(hasGlob(configFileStr)) {
+                configfile = handleGlob(configFileStr);
+            }
+            
             // Set log4j.configurationFile here instead of passing the file location as the final parameter of
             // getConfiguration. This allows users to make use of log4j2's composite behaviour. This is due to it
             // only being handled/configured if the configuration file is set via property. See code at:
