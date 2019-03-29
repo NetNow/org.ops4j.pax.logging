@@ -207,5 +207,19 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+  
+  
+  <distributionManagement>
+    <repository>
+      <id>thirdparty</id>
+      <name>Thirdparty Repository</name>
+      <url>http://reposerver02.int-link.com/nexus/content/repositories/thirdparty</url>
+    </repository>
+    <snapshotRepository>
+      <id>thirdparty-snapshots</id>
+      <name>Thirdparty Snapshot Repository</name>
+      <url>http://reposerver02.int-link.com/nexus/content/repositories/thirdparty-snapshots</url>
+    </snapshotRepository>
+  </distributionManagement>
 
 </project>
