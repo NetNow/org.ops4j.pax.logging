@@ -288,11 +288,13 @@ public class PaxLoggingServiceImpl
         for(String pathStr : paths) {
             StatusLogger.getLogger().debug("Working with string: {}", pathStr);
             final int regexIndex = pathStr.indexOf("*");
-            final Path path = Paths.get(pathStr);
-            if(Files.exists(path)) {
-                if(regexIndex > -1) {
-                    String glob = pathStr.substring(regexIndex);
-                    pathStr = pathStr.substring(0, regexIndex);
+
+            if(regexIndex > -1) {
+                String glob = pathStr.substring(regexIndex);
+                pathStr = pathStr.substring(0, regexIndex);
+                final Path path = Paths.get(pathStr);
+                StatusLogger.getLogger().debug("Have path: {}, Exists: {}, Is Directory: {}", path, Files.isDirectory(path));
+                if(Files.isDirectory(path)) {
                     try (DirectoryStream<Path> stream = Files.newDirectoryStream(path, glob)) {
                         configFileWatcher.register(path);
                         for (Path entry: stream) {
@@ -302,11 +304,11 @@ public class PaxLoggingServiceImpl
                     } catch (IOException ex) {
                         StatusLogger.getLogger().error("Error handling glob", ex);
                     }
-                    
-                } else {
-                    sb.append(pathStr);
-                    sb.append(",");
                 }
+                
+            } else {
+                sb.append(pathStr);
+                sb.append(",");
             }
         }
         
